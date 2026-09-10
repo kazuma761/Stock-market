@@ -1,0 +1,10 @@
+{
+    "symbols": [
+        "AAPL",
+        "GOOG",
+        "MSFT"
+    ],
+    "schedule": "0 22 * * *",
+    "retries": 2,
+    "retry_delay_minutes": 5
+}
