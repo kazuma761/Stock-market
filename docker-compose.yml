@@ -20,7 +20,10 @@ x-airflow-common: &airflow-common
     - ./core:/opt/airflow/core
     - ./utils:/opt/airflow/utils
     - ./config.json:/opt/airflow/config.json
-    - ./logs:/opt/airflow/logs
+    # A named volume, not a bind mount: a host ./logs directory would be
+    # created root-owned and the airflow user could not write to it, which
+    # would cost the evaluator an undocumented `mkdir`/`chown` step.
+    - airflow-logs:/opt/airflow/logs
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     postgres:
@@ -92,3 +95,4 @@ services:
 
 volumes:
   postgres-db-volume:
+  airflow-logs:
