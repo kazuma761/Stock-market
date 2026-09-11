@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timedelta
 
 from airflow import DAG
-from airflow.exceptions import AirflowException
+from airflow.exceptions import AirflowFailException
 from airflow.operators.python import PythonOperator
 
 from core.stock_fetcher import StockFetcher
@@ -49,8 +49,13 @@ def store_stock_data(result: dict) -> None:
     outage still lands the data it managed to collect while the task itself goes
     red with the reason. Raising first would discard good rows on retry.
 
+    Fetch failures fail the task WITHOUT retrying it. A retry of this task only
+    re-reads the same XCom -- it cannot re-fetch -- so it would wait out every
+    retry delay and fail identically. Database errors still raise normally and
+    do get Airflow's retries, since a store retry can fix those.
+
     Raises:
-        AirflowException: If any symbol failed to fetch.
+        AirflowFailException: If any symbol failed to fetch.
     """
     data = result.get("data", {})
     failures = result.get("failures", [])
@@ -58,7 +63,7 @@ def store_stock_data(result: dict) -> None:
     written = Storage(logger).store_data(data)
 
     if failures:
-        raise AirflowException(
+        raise AirflowFailException(
             f"Stored {written} row(s), but {len(failures)} symbol(s) failed: "
             + "; ".join(failures)
         )

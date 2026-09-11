@@ -60,6 +60,18 @@ class TestStoreTaskFailureSignal(unittest.TestCase):
         self.assertIn("GOOG", str(ctx.exception))
 
     @patch("dags.stock_data_dag.Storage")
+    def test_fetch_failures_are_not_retried(self, mock_storage):
+        from airflow.exceptions import AirflowFailException
+
+        from dags.stock_data_dag import store_stock_data
+
+        mock_storage.return_value.store_data.return_value = 0
+
+        # A store retry cannot re-fetch; it would only wait and fail the same way.
+        with self.assertRaises(AirflowFailException):
+            store_stock_data({"data": {}, "failures": ["AAPL: quota exhausted"]})
+
+    @patch("dags.stock_data_dag.Storage")
     def test_stores_before_raising(self, mock_storage):
         from dags.stock_data_dag import store_stock_data
 

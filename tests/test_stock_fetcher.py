@@ -246,7 +246,10 @@ class TestNetworkFailure(StockFetcherTestCase):
 
     @patch("core.stock_fetcher.requests.get")
     def test_unreachable_api_does_not_stop_the_run(self, mock_get):
+        # AAPL's first call fails on every network retry; GOOG then succeeds.
         mock_get.side_effect = [
+            requests.exceptions.ConnectionError("unreachable"),
+            requests.exceptions.ConnectionError("unreachable"),
             requests.exceptions.ConnectionError("unreachable"),
             _response(QUOTE_PAYLOAD),
             _response(OVERVIEW_PAYLOAD),
@@ -257,6 +260,54 @@ class TestNetworkFailure(StockFetcherTestCase):
         self.assertIn("GOOG", data)
         self.assertEqual(len(failures), 1)
         self.assertIn("request failed", failures[0])
+
+    @patch("core.stock_fetcher.requests.get")
+    def test_transient_network_error_is_retried(self, mock_get):
+        # Airflow never retries the fetch for this (the task still succeeds),
+        # so a blip that clears must be retried in-process.
+        mock_get.side_effect = [
+            requests.exceptions.Timeout("slow"),
+            _response(QUOTE_PAYLOAD),
+            _response(OVERVIEW_PAYLOAD),
+            _response(QUOTE_PAYLOAD),
+            _response(OVERVIEW_PAYLOAD),
+        ]
+
+        data, failures = self.fetcher.fetch()
+
+        self.assertEqual(sorted(data), ["AAPL", "GOOG"])
+        self.assertEqual(failures, [])
+
+
+class TestApiKeyRedaction(StockFetcherTestCase):
+    """The key must never reach logs, XCom, or the Airflow UI."""
+
+    @patch("core.stock_fetcher.requests.get")
+    def test_key_echoed_in_quota_notice_is_redacted(self, mock_get):
+        # Alpha Vantage really does echo the key back in this message.
+        mock_get.return_value = _response(
+            {"Information": "We have detected your API key as test-key and ..."}
+        )
+
+        _, failures = self.fetcher.fetch()
+
+        logged = " ".join(str(c) for c in self.logger.method_calls)
+        self.assertNotIn("test-key", logged)
+        self.assertNotIn("test-key", " ".join(failures))
+
+    @patch("core.stock_fetcher.requests.get")
+    def test_key_in_http_error_url_is_redacted(self, mock_get):
+        response = _response({})
+        response.raise_for_status.side_effect = requests.exceptions.HTTPError(
+            "500 Server Error for url: https://x/query?apikey=test-key"
+        )
+        mock_get.return_value = response
+
+        _, failures = self.fetcher.fetch()
+
+        self.assertIn("apikey=***", failures[0])
+        logged = " ".join(str(c) for c in self.logger.method_calls)
+        self.assertNotIn("test-key", logged)
 
 
 class TestPartialOverview(StockFetcherTestCase):

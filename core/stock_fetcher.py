@@ -33,6 +33,13 @@ ERROR_KEY = "Error Message"
 # quota is actually spent -- a premature conclusion abandons the whole run.
 BACKOFF_SCHEDULE_SECONDS = (5, 15, 45)
 
+# Transient transport failures are retried here, in-process. Leaving them to
+# Airflow's task retries would not work: fetch() isolates per-symbol errors so
+# the other symbols continue, which means a network blip never fails the fetch
+# task and Airflow would never re-run it.
+NETWORK_RETRY_DELAYS_SECONDS = (2, 5)
+TRANSIENT_ERRORS = (requests.exceptions.ConnectionError, requests.exceptions.Timeout)
+
 
 class RateLimited(Exception):
     """Raised when the API declines a call for rate-limit reasons.
@@ -82,6 +89,14 @@ class StockFetcher:
             time.sleep(REQUEST_INTERVAL_SECONDS - elapsed)
         self._last_request_at = time.monotonic()
 
+    def _redact(self, message: object) -> str:
+        """Strip the API key from text headed for logs, XCom, or exceptions.
+
+        Alpha Vantage echoes the key back inside its rate-limit notice, and
+        requests puts the full URL -- `apikey=` included -- in HTTP errors.
+        """
+        return str(message).replace(self.api_key, "***")
+
     def _call(self, function: str, symbol: str) -> dict:
         """Make one paced API call and return its parsed body.
 
@@ -101,12 +116,30 @@ class StockFetcher:
 
         for key in RATE_LIMIT_KEYS:
             if key in payload:
-                raise RateLimited(payload[key])
+                raise RateLimited(self._redact(payload[key]))
 
         if ERROR_KEY in payload:
-            raise ValueError(payload[ERROR_KEY])
+            raise ValueError(self._redact(payload[ERROR_KEY]))
 
         return payload
+
+    def _call_with_network_retry(self, function: str, symbol: str) -> dict:
+        """`_call`, retrying dropped connections and timeouts.
+
+        Raises:
+            The same as `_call`, once the network retries are used up.
+        """
+        for delay in NETWORK_RETRY_DELAYS_SECONDS:
+            try:
+                return self._call(function, symbol)
+            except TRANSIENT_ERRORS as e:
+                self.logger.warning(
+                    f"Network error on {function} for {symbol}: {self._redact(e)}. "
+                    f"Retrying in {delay}s."
+                )
+                time.sleep(delay)
+
+        return self._call(function, symbol)
 
     def _request(self, function: str, symbol: str) -> dict:
         """Call an endpoint, retrying with escalating backoff if rate-limited.
@@ -127,7 +160,7 @@ class StockFetcher:
 
         for attempt, backoff in enumerate(BACKOFF_SCHEDULE_SECONDS, start=1):
             try:
-                return self._call(function, symbol)
+                return self._call_with_network_retry(function, symbol)
             except RateLimited as e:
                 last = e
                 self.logger.warning(
@@ -138,7 +171,7 @@ class StockFetcher:
                 time.sleep(backoff)
 
         try:
-            return self._call(function, symbol)
+            return self._call_with_network_retry(function, symbol)
         except RateLimited as final:
             raise QuotaExhausted(final) from final
 
@@ -245,8 +278,9 @@ class StockFetcher:
                 break
 
             except requests.exceptions.RequestException as e:
-                self.logger.error(f"Request failed for {symbol}: {e}")
-                failures.append(f"{symbol}: request failed ({e})")
+                reason = self._redact(e)
+                self.logger.error(f"Request failed for {symbol}: {reason}")
+                failures.append(f"{symbol}: request failed ({reason})")
 
             except (ValueError, KeyError, TypeError) as e:
                 self.logger.error(f"Could not parse data for {symbol}: {e}")

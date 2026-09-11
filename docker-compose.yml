@@ -44,11 +44,10 @@ services:
       - postgres-db-volume:/var/lib/postgresql/data
       # Runs only on first volume creation. `docker compose down -v` to re-apply.
       - ./database_setup/init.sql:/docker-entrypoint-initdb.d/init.sql
-    ports:
-      # Host-side access only, for `psql` from your machine. The pipeline talks
-      # to `postgres:5432` over the compose network and ignores this. Override
-      # POSTGRES_HOST_PORT if 5433 is also taken on your machine.
-      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    # No host port is published. Everything that needs the database reaches it
+    # over the compose network, and `docker compose exec postgres psql ...`
+    # works without one -- so publishing it would only create a port collision
+    # on machines that already run Postgres.
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
       interval: 5s
@@ -74,7 +73,8 @@ services:
     <<: *airflow-common
     command: webserver
     ports:
-      - "8080:8080"
+      # Override AIRFLOW_PORT in .env if 8080 is taken on your machine.
+      - "${AIRFLOW_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
       interval: 30s
