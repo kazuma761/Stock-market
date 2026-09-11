@@ -26,3 +26,7 @@ airflow.cfg
 module/
 # Local Claude Code settings
 .claude/settings.local.json
+
+# Local env backups
+.env.backup*
+.env.*.backup

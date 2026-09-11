@@ -20,6 +20,7 @@ x-airflow-common: &airflow-common
     - ./core:/opt/airflow/core
     - ./utils:/opt/airflow/utils
     - ./config.json:/opt/airflow/config.json
+    - ./tests:/opt/airflow/tests
     # A named volume, not a bind mount: a host ./logs directory would be
     # created root-owned and the airflow user could not write to it, which
     # would cost the evaluator an undocumented `mkdir`/`chown` step.
@@ -44,7 +45,10 @@ services:
       # Runs only on first volume creation. `docker compose down -v` to re-apply.
       - ./database_setup/init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
-      - "5432:5432"
+      # Host-side access only, for `psql` from your machine. The pipeline talks
+      # to `postgres:5432` over the compose network and ignores this. Override
+      # POSTGRES_HOST_PORT if 5433 is also taken on your machine.
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
       interval: 5s

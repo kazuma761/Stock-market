@@ -4,21 +4,28 @@ from unittest.mock import MagicMock, patch
 
 import requests
 
-from core.stock_fetcher import QuotaExhausted, StockFetcher
+from core.stock_fetcher import StockFetcher
 
+# Captured verbatim from the live API on 2026-09-10.
 QUOTE_PAYLOAD = {
     "Global Quote": {
         "01. symbol": "AAPL",
-        "05. price": "150.0000",
-        "06. volume": "50000000",
-        "10. change percent": "1.2345%",
+        "02. open": "316.6700",
+        "03. high": "326.7400",
+        "04. low": "316.5100",
+        "05. price": "326.5700",
+        "06. volume": "70011913",
+        "07. latest trading day": "2026-09-10",
+        "08. previous close": "315.3400",
+        "09. change": "11.2300",
+        "10. change percent": "3.5612%",
     }
 }
 
 OVERVIEW_PAYLOAD = {
     "Symbol": "AAPL",
-    "Name": "Apple Inc",
-    "MarketCapitalization": "3000000000000",
+    "Name": "Apple Inc.",
+    "MarketCapitalization": "4602128761000",
 }
 
 
@@ -48,6 +55,12 @@ class StockFetcherTestCase(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
 
+        # The fetcher paces itself to respect the 1 request/second free tier.
+        # Real sleeping would make this suite take minutes.
+        sleeper = patch("core.stock_fetcher.time.sleep")
+        self.sleep = sleeper.start()
+        self.addCleanup(sleeper.stop)
+
         self.fetcher = StockFetcher(self.logger)
 
 
@@ -62,14 +75,53 @@ class TestFetchSuccess(StockFetcherTestCase):
         self.assertEqual(
             data["AAPL"],
             {
-                "price": "150.0000",
-                "volume": "50000000",
+                "name": "Apple Inc.",
+                # The session the data describes, not the day we ran.
+                "trading_day": "2026-09-10",
+                "price": "326.5700",
+                "open_price": "316.6700",
+                "high_price": "326.7400",
+                "low_price": "316.5100",
+                "previous_close": "315.3400",
+                "change_amount": "11.2300",
                 # The trailing % must be stripped: the column is DECIMAL.
-                "change_percent": "1.2345",
-                "name": "Apple Inc",
-                "market_cap": "3000000000000",
+                "change_percent": "3.5612",
+                "volume": "70011913",
+                "market_cap": "4602128761000",
             },
         )
+
+    @patch("core.stock_fetcher.requests.get")
+    def test_optional_fields_become_none_not_failure(self, mock_get):
+        # A quote missing its high/low is still a usable price record, so the
+        # symbol must survive with NULLs rather than being rejected.
+        sparse = {
+            "Global Quote": {
+                "05. price": "100.0",
+                "06. volume": "123",
+                "07. latest trading day": "2026-09-10",
+            }
+        }
+        mock_get.side_effect = [_response(sparse), _response(OVERVIEW_PAYLOAD)]
+
+        data, failures = self.fetcher.fetch()
+
+        self.assertEqual(failures, [])
+        self.assertIsNone(data["AAPL"]["high_price"])
+        self.assertIsNone(data["AAPL"]["change_percent"])
+        self.assertEqual(data["AAPL"]["price"], "100.0")
+
+    @patch("core.stock_fetcher.requests.get")
+    def test_missing_trading_day_fails_the_symbol(self, mock_get):
+        # trading_day is half the unique key; without it the row cannot be
+        # written idempotently, so the symbol must be rejected.
+        broken = {"Global Quote": {"05. price": "100.0", "06. volume": "123"}}
+        mock_get.side_effect = [_response(broken), _response(OVERVIEW_PAYLOAD)]
+
+        data, failures = self.fetcher.fetch()
+
+        self.assertEqual(data, {})
+        self.assertEqual(len(failures), 1)
 
     @patch("core.stock_fetcher.requests.get")
     def test_costs_two_requests_per_symbol(self, mock_get):
@@ -105,22 +157,54 @@ class TestQuotaExhaustion(StockFetcherTestCase):
         self.assertTrue(all("quota exhausted" in f for f in failures))
 
     @patch("core.stock_fetcher.requests.get")
-    def test_stops_calling_after_quota_hit(self, mock_get):
+    def test_stops_calling_after_quota_confirmed(self, mock_get):
         mock_get.return_value = _response({"Information": "rate limit reached"})
 
         self.fetcher.fetch()
 
-        # One call, then the loop abandons the rest: the budget is account-wide,
-        # so continuing would only produce identical errors.
-        self.assertEqual(mock_get.call_count, 1)
+        # Four attempts (three backoffs plus a final try) before the quota is
+        # declared spent, then the loop abandons the rest -- the budget is
+        # account-wide.
+        self.assertEqual(mock_get.call_count, 4)
+
+    @patch("core.stock_fetcher.requests.get")
+    def test_throttle_that_clears_on_retry_does_not_abort_the_run(self, mock_get):
+        # Alpha Vantage returns the SAME "Information" key for the 1/second
+        # burst limit as for the spent daily quota. Treating the first one as
+        # terminal would abandon the run over a momentary throttle.
+        mock_get.side_effect = [
+            _response({"Information": "1 request per second"}),
+            _response(QUOTE_PAYLOAD),
+            _response(OVERVIEW_PAYLOAD),
+            _response(QUOTE_PAYLOAD),
+            _response(OVERVIEW_PAYLOAD),
+            _response(QUOTE_PAYLOAD),
+            _response(OVERVIEW_PAYLOAD),
+        ]
+
+        data, failures = self.fetcher.fetch()
+
+        self.assertEqual(failures, [])
+        self.assertEqual(len(data), 3)
+
+    @patch("core.stock_fetcher.requests.get")
+    def test_requests_are_paced(self, mock_get):
+        mock_get.side_effect = [
+            _response(QUOTE_PAYLOAD),
+            _response(OVERVIEW_PAYLOAD),
+        ] * 3
+
+        self.fetcher.fetch()
+
+        # Pacing must actually happen, or the free tier throttles us.
+        self.assertTrue(self.sleep.called)
 
     @patch("core.stock_fetcher.requests.get")
     def test_keeps_symbols_fetched_before_the_quota_ran_out(self, mock_get):
         mock_get.side_effect = [
             _response(QUOTE_PAYLOAD),
             _response(OVERVIEW_PAYLOAD),
-            _response({"Information": "rate limit reached"}),
-        ]
+        ] + [_response({"Information": "rate limit reached"})] * 4
 
         data, failures = self.fetcher.fetch()
 
@@ -133,6 +217,8 @@ class TestBadSymbol(StockFetcherTestCase):
 
     @patch("core.stock_fetcher.requests.get")
     def test_empty_quote_fails_only_that_symbol(self, mock_get):
+        # Verified live: an unknown ticker returns HTTP 200 with an empty
+        # "Global Quote" object, not an error status.
         mock_get.side_effect = [
             _response({"Global Quote": {}}),
             _response(QUOTE_PAYLOAD),
@@ -176,8 +262,7 @@ class TestNetworkFailure(StockFetcherTestCase):
 class TestPartialOverview(StockFetcherTestCase):
     @patch("core.stock_fetcher.requests.get")
     def test_missing_company_name_fails_the_symbol(self, mock_get):
-        # name and market_cap are NOT NULL, so a half-populated row must never
-        # reach the database.
+        # name is NOT NULL, so a row without it must never reach the database.
         mock_get.side_effect = [
             _response(QUOTE_PAYLOAD),
             _response({"Symbol": "AAPL", "MarketCapitalization": "3000"}),
@@ -187,6 +272,20 @@ class TestPartialOverview(StockFetcherTestCase):
 
         self.assertEqual(data, {})
         self.assertEqual(len(failures), 1)
+
+    @patch("core.stock_fetcher.requests.get")
+    def test_missing_market_cap_is_tolerated(self, mock_get):
+        # market_cap is nullable: an ETF or index has no meaningful one, and
+        # losing the price record over it would be the wrong trade.
+        mock_get.side_effect = [
+            _response(QUOTE_PAYLOAD),
+            _response({"Symbol": "AAPL", "Name": "Apple Inc."}),
+        ]
+
+        data, failures = self.fetcher.fetch()
+
+        self.assertEqual(failures, [])
+        self.assertIsNone(data["AAPL"]["market_cap"])
 
 
 class TestConfiguration(unittest.TestCase):

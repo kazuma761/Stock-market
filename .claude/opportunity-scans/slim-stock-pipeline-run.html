@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Opportunity Scan — slim-stock-pipeline run</title>
+<style>
+  :root{
+    --bg:#fbfaf8; --panel:#fff; --ink:#1b1a17; --muted:#6b6760; --line:#e5e1da;
+    --accent:#8a4b2a; --accent-soft:#f4ece6; --warn:#9a6a00; --warn-soft:#fbf3e0;
+    --good:#2f6b43; --good-soft:#eaf3ec; --code:#f3f1ed;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#141310; --panel:#1c1b18; --ink:#eceae5; --muted:#a09a90; --line:#2e2c27;
+      --accent:#e08a5b; --accent-soft:#2a201a; --warn:#e0b45c; --warn-soft:#2a2418;
+      --good:#7fc294; --good-soft:#1a2a1e; --code:#242220;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.65 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:860px;margin:0 auto;padding:56px 24px 96px}
+  header{border-bottom:1px solid var(--line);padding-bottom:28px;margin-bottom:44px}
+  .eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:650}
+  h1{font-size:31px;line-height:1.2;margin:14px 0 10px;letter-spacing:-.02em}
+  .sub{color:var(--muted);font-size:15px;margin:0}
+  .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:22px}
+  .chip{font-size:12.5px;padding:5px 11px;border:1px solid var(--line);border-radius:999px;
+    background:var(--panel);color:var(--muted)}
+  h2{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);
+    margin:52px 0 18px;font-weight:650}
+  .lede{background:var(--accent-soft);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:10px;padding:22px 24px;margin:0 0 12px}
+  .lede p{margin:0 0 12px}.lede p:last-child{margin:0}
+  .chain{list-style:none;margin:22px 0 0;padding:0;counter-reset:s}
+  .chain li{position:relative;padding:0 0 20px 34px;border-left:1px solid var(--line);margin-left:9px;counter-increment:s}
+  .chain li:last-child{border-left-color:transparent;padding-bottom:0}
+  .chain li::before{content:counter(s);position:absolute;left:-10px;top:-1px;width:20px;height:20px;
+    border-radius:50%;background:var(--accent);color:#fff;font-size:11px;font-weight:700;
+    display:flex;align-items:center;justify-content:center}
+  .chain b{font-weight:650}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:24px 26px;margin-bottom:18px}
+  .card h3{margin:0 0 4px;font-size:18.5px;letter-spacing:-.01em}
+  .card .tag{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;
+    letter-spacing:.08em;text-transform:uppercase;padding:4px 10px;border-radius:6px;
+    background:var(--accent-soft);color:var(--accent);margin-bottom:14px}
+  .tag.rules{background:var(--warn-soft);color:var(--warn)}
+  .tag.hook{background:var(--good-soft);color:var(--good)}
+  .card p{margin:0 0 13px}
+  .ev{background:var(--code);border-radius:8px;padding:13px 15px;margin:13px 0;
+    font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-x:auto;white-space:pre-wrap;
+    color:var(--ink)}
+  .do{border-top:1px dashed var(--line);margin-top:16px;padding-top:15px}
+  .do strong{color:var(--accent)}
+  code{background:var(--code);padding:1.5px 5px;border-radius:4px;
+    font:13.5px ui-monospace,SFMono-Regular,Menlo,monospace}
+  table{width:100%;border-collapse:collapse;font-size:14.5px;margin-top:8px}
+  th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:650}
+  td:first-child{white-space:nowrap;font-weight:600}
+  .none{background:var(--good-soft);border:1px solid var(--line);border-left:3px solid var(--good);
+    border-radius:10px;padding:20px 24px}
+  .none h3{margin:0 0 8px;font-size:16px}
+  .none p{margin:0 0 12px}.none p:last-child{margin:0}
+  footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--line);
+    color:var(--muted);font-size:13.5px}
+  @media(max-width:600px){.wrap{padding:36px 16px 64px}h1{font-size:25px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">Opportunity Scan · Reactive</div>
+  <h1>What would have caught the <code>"None"</code> bug?</h1>
+  <p class="sub">One run, scanned for the durable changes that would have prevented what went wrong —
+  not the code fixes, the system fixes.</p>
+  <div class="meta">
+    <span class="chip">Target: the <b>slim-stock-pipeline</b> run</span>
+    <span class="chip">Agent: Claude Code</span>
+    <span class="chip">5 findings · 2 honest non-findings</span>
+  </div>
+</header>
+
+<h2>The headline</h2>
+<div class="lede">
+  <p>This run shipped a <b>high-severity bug that the plan itself predicted in writing</b> — and no part of the
+  AI layer stood between the prediction and the defect.</p>
+  <p>The plan marked a spike <b>BLOCKING</b>. It couldn't run. The implementation substituted an assumption,
+  wrote its test doubles from documentation instead of captured payloads, and the assumption was wrong in exactly
+  the way the plan warned about.</p>
+</div>
+
+<ol class="chain">
+  <li><b>The plan recorded the risk verbatim.</b> <i>"Assumed — OVERVIEW returns non-empty Name and
+  MarketCapitalization… Both are NOT NULL; a blank would fail the insert."</i></li>
+  <li><b>Phase 0 could not run.</b> Report, deviation #1: <i>"The ALPHA_API_KEY in .env is a placeholder…
+  No fixtures were captured from live responses."</i></li>
+  <li><b>Fixtures were invented instead.</b> <i>"Test fixtures were built from Alpha Vantage's published
+  response shapes instead of captured payloads."</i></li>
+  <li><b>The test asserted the wrong scenario.</b> <code>test_missing_market_cap_is_tolerated</code> mocks the
+  key as <i>absent</i>. The real API sends the four-character string <code>"None"</code>.</li>
+  <li><b>The defect survived to the live database.</b> <code>_optional</code> passes <code>"None"</code>
+  through; Postgres rejects it; <code>Storage</code> catches at batch scope and rolls back — one ETF destroys
+  the whole day's collection.</li>
+</ol>
+
+<h2>Findings</h2>
+
+<div class="card">
+  <span class="tag rules">Rules — CLAUDE.md</span>
+  <h3>1. Fixtures for third-party APIs may not be written from documentation</h3>
+  <p>This is the single line that would have stopped the chain above. The failure wasn't carelessness — the
+  agent reasoned carefully and hedged well (it handled <i>both</i> <code>Note</code> and
+  <code>Information</code>). What it couldn't do was invent a payload shape it had never seen.</p>
+  <div class="ev">Test doubles for third-party APIs must be built from real captured payloads
+committed under tests/fixtures/. Never write a mock payload from API
+documentation or from memory — capture it, commit it, assert against it.
+If the payload cannot be captured, the work is blocked, not assumed.</div>
+  <p>The second clause matters as much as the first: it converts "I couldn't verify this" from a footnote in a
+  deviations table into a stop condition.</p>
+  <div class="do"><strong>Build:</strong> a <code>CLAUDE.md</code> — this project has none (see finding 2),
+  so this rule is the seed for it.</div>
+</div>
+
+<div class="card">
+  <span class="tag rules">Rules — CLAUDE.md</span>
+  <h3>2. The project has no rules file at all</h3>
+  <p>No <code>CLAUDE.md</code>, no <code>AGENTS.md</code>, no <code>.claude/rules/</code>. The entire AI layer
+  is one <code>settings.local.json</code> containing a single skill override. Every session re-derived the same
+  facts from scratch — and the run's own "Issues encountered" section is a list of them:</p>
+  <div class="ev">· unittest, not pytest — and discovery only matches test*.py
+  (tests/dags_test.py was silently never collected)
+· black for formatting; Google-style docstrings
+· Airflow 2.9 does not support Python 3.12+ — local default is 3.13
+· three conflicting Airflow pins (req 2.8.0 / Dockerfile 2.9.0 / CI 2.8.1)</div>
+  <p>Each of those cost a rediscovery this run. They are exactly what a rules file is for.</p>
+  <div class="do"><strong>Build:</strong> run <code>/rules-create-global</code> — it's already installed and
+  designed for precisely this, deriving from the primed codebase.</div>
+</div>
+
+<div class="card">
+  <span class="tag">Skill</span>
+  <h3>3. <code>/piv-validate</code> is still the shipped template</h3>
+  <p>Lines 32–33 of the skill still read <code># REPLACE: your test command</code> and
+  <code>&lt;your test command&gt;</code>. The skill's own warning — <i>"a checker that cannot fail is
+  worthless"</i> — describes this project's current state.</p>
+  <p>The consequence is visible in the run: validation was declared complete with
+  <b>"L3 integration — NOT RUN"</b> and <b>"L4 manual validation — NOT RUN"</b>, and the pipeline went three
+  full turns before anyone ran it. When it finally was run, every command had to be improvised — in-container
+  <code>unittest</code>, a throwaway container for <code>black</code>, hand-rolled compose polling.</p>
+  <p>This is also where the run's nastiest near-miss belongs. Second-pass defect #1: the Dockerfile built
+  Python 3.8 while the code uses PEP 585 generics — <i>"Every test passed locally (3.13) and in CI (3.11)
+  while the actual runtime was the one interpreter that breaks."</i> Only a real container run catches that
+  class of bug, and nothing required one.</p>
+  <div class="do"><strong>Build:</strong> fill in <code>piv-validate</code> with this project's real commands,
+  and make the container run non-optional:
+  <div class="ev">docker compose up -d --build
+docker compose exec -T -w /opt/airflow airflow-scheduler python -m unittest discover tests
+docker compose exec -T airflow-scheduler airflow dags list-import-errors
+docker run --rm -v "$PWD":/src -w /src python:3.11-slim sh -c "pip install -q black && black --check ."</div>
+  Highest leverage, lowest effort item on this list.</div>
+</div>
+
+<div class="card">
+  <span class="tag rules">Rules — CLAUDE.md</span>
+  <h3>4. Two parallel sessions produced two competing ticket breakdowns</h3>
+  <p>Timestamps tell it plainly — one epic, two decompositions, one minute apart, at different granularities
+  and different paths:</p>
+  <div class="ev">21:49  docs/planning/slim-stock-pipeline.md      5 coarse waves   (session A)
+21:50  docs/planning/tickets/01…24.md           24 fine tickets  (session B)</div>
+  <p>A later planning turn was spent working out which was authoritative, and the two were reconciled by hand
+  into <code>docs/planning/</code>. Nothing about the work was wrong; the two sessions simply had no shared
+  convention for where planning artifacts live.</p>
+  <p>The same root cause produced a second, smaller cost: a commit was prepared and reported as final while
+  another session was still editing the tree, so it went stale within minutes.</p>
+  <div class="do"><strong>Build:</strong> one line in <code>CLAUDE.md</code> — <i>"All planning artifacts live
+  in <code>docs/planning/</code>: PRD, architecture, and <code>tickets/NN-slug.md</code>. Check it before
+  creating any new planning doc."</i></div>
+</div>
+
+<div class="card">
+  <span class="tag hook">Hook — PreToolUse</span>
+  <h3>5. Nothing deterministically prevents committing a secret</h3>
+  <p>Ordinarily this would be speculative. It isn't here, for two reasons: a <b>live Alpha Vantage key now sits
+  in <code>.env</code></b>, a <code>publish</code> remote is configured — and this repository's own history
+  already contains a commit named <b><code>add AWS credentials</code></b> that added <code>.env</code> with
+  <code>AWS_ACCESS_KEY_ID</code> and <code>AWS_SECRET_ACCESS_KEY</code> in it.</p>
+  <p>Protection today is <code>.gitignore</code> plus a <code>detect-private-key</code> pre-commit hook — both
+  of which an agent running <code>git add -f</code> or writing a new file outside the ignore pattern can walk
+  straight past. A <code>PreToolUse</code> hook on <code>Bash</code> is enforcement the agent cannot talk
+  itself out of.</p>
+  <div class="do"><strong>Build:</strong> <code>/hooks-create</code> → a <code>PreToolUse</code> hook matching
+  <code>Bash(git add *)</code> and <code>Bash(git commit *)</code> that scans staged content for key-shaped
+  strings and returns <code>permissionDecision: "deny"</code>.</div>
+</div>
+
+<h2>Not worth encoding</h2>
+<div class="none">
+  <h3>Two things went wrong that need no rule</h3>
+  <p><b>The credential investigation.</b> Auto mode's classifier blocked reading secret values out of git
+  history — twice — and the right thing happened: the work stopped and escalated to a human instead of dumping
+  credentials into a transcript. That guardrail already works. Adding a rule here would be cargo cult.</p>
+  <p><b>The stale README report.</b> A claim about the tree was accurate when made and false ten minutes later.
+  That isn't a missing rule; it's finding 4 wearing a different hat. Fixing the artifact convention fixes this
+  too — inventing a separate "re-verify before reporting" rule would just add a line nobody reads.</p>
+</div>
+
+<h2>Suggested order</h2>
+<table>
+  <tr><th>Do</th><th>Why this order</th><th>Primitive</th></tr>
+  <tr><td>Finding 3</td><td>Thirty minutes, and it is the thing that would have caught the container/interpreter
+    bug on pass one instead of pass two.</td><td>Skill</td></tr>
+  <tr><td>Findings 1 + 2 + 4</td><td>One <code>/rules-create-global</code> pass creates the file; all three
+    findings are lines inside it.</td><td>Rules</td></tr>
+  <tr><td>Finding 5</td><td>Cheap, deterministic, and this repo has already made the mistake once.</td>
+    <td>Hook</td></tr>
+</table>
+
+<footer>
+  Reactive scan of one run. Sources: <code>.claude/plans/slim-stock-pipeline.md</code> ·
+  <code>.claude/reports/slim-stock-pipeline-report.md</code> ·
+  <code>.claude/code-reviews/slim-stock-pipeline.md</code> · <code>docs/planning/</code> · working tree.
+  For the proactive view — what you repeat across weeks — re-run this scan pointed at
+  <code>~/.claude/projects/</code>.
+</footer>
+
+</div>
+</body>
+</html>

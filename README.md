@@ -1,179 +1,295 @@
-# MarketPipe
+<p align="center">
+  <img src="assets/marketpipe_logo.png" alt="MarketPipe" width="160">
+</p>
 
-A Dockerized data pipeline that fetches daily stock market data from
-[Alpha Vantage](https://www.alphavantage.co/), parses it, and stores it in PostgreSQL — orchestrated by Apache
-Airflow and started with a single command.
+<h1 align="center">MarketPipe</h1>
 
----
-
-## Quick start
-
-You need **Docker** (with Compose v2). Nothing else — no local Python, no local Postgres.
-
-```bash
-git clone <this-repo> && cd MarketPipe
-
-cp .env.example .env
-# Open .env and paste your Alpha Vantage key into ALPHA_API_KEY.
-# Claiming a free key takes ~20 seconds: https://www.alphavantage.co/support/#api-key
-
-docker compose up
-```
-
-That is the only manual step. When the logs settle, open **http://localhost:8080** and log in with
-`airflow` / `airflow` (change these in `.env` if you like).
-
-The `stock_data_pipeline` DAG is enabled on startup. To see data immediately without waiting for the schedule,
-press **▶ Trigger DAG**.
-
-### Verify it worked
-
-```bash
-docker compose exec postgres psql -U marketpipe -d market_data \
-  -c "SELECT symbol, name, price, volume, change_percent, date_collected FROM market_data.stocks ORDER BY symbol;"
-```
-
-```
- symbol |       name        | price  |  volume  | change_percent | date_collected
---------+-------------------+--------+----------+----------------+----------------
- AAPL   | Apple Inc         | 150.00 | 50000000 |     1.23450000 | 2026-09-10
- GOOG   | Alphabet Inc      | ...    | ...      |            ... | 2026-09-10
- MSFT   | Microsoft Corp    | ...    | ...      |            ... | 2026-09-10
-```
-
-Trigger the DAG a second time and re-run the query: the row count does not change. Writes are idempotent.
-
-### Shutting down
-
-```bash
-docker compose down      # stop, keep data
-docker compose down -v   # stop and delete data
-```
-
-> `database_setup/init.sql` runs **only when the database volume is first created**. If you change the schema,
-> you must `docker compose down -v` for the change to take effect.
-
----
-
-## Deliverables
-
-| Deliverable | File |
-| --- | --- |
-| Docker Compose | [`docker-compose.yaml`](docker-compose.yaml) |
-| Orchestrator logic (DAG) | [`dags/stock_data_dag.py`](dags/stock_data_dag.py) |
-| Data fetching script | [`core/stock_fetcher.py`](core/stock_fetcher.py) |
-| Instructions | this file |
-
-Supporting files: [`core/storage.py`](core/storage.py) (database writes),
-[`database_setup/init.sql`](database_setup/init.sql) (schema), [`config.json`](config.json) (symbols + schedule).
+<p align="center">
+  Fetches daily stock prices from <a href="https://www.alphavantage.co/">Alpha Vantage</a>, stores them in PostgreSQL,
+  and runs automatically every day with Apache Airflow.<br>
+  <b>One command to start. Runs the same on Windows, macOS, and Linux.</b>
+</p>
 
 ---
 
 ## How it works
 
-```
-                  ┌──────────────────── Airflow (scheduler + webserver) ────────────────────┐
-                  │                                                                          │
-   Alpha Vantage  │   ┌──────────────────┐         ┌───────────────────┐                    │
-   ───────────────┼──▶│ fetch_stock_data │────────▶│ store_stock_data  │                    │
-   GLOBAL_QUOTE   │   │  StockFetcher    │  XCom   │     Storage       │                    │
-   OVERVIEW       │   └──────────────────┘         └─────────┬─────────┘                    │
-                  │                                          │                               │
-                  └──────────────────────────────────────────┼───────────────────────────────┘
-                                                             ▼
-                                              PostgreSQL  market_data.stocks
-```
+```mermaid
+flowchart LR
+    API["🌐 Alpha Vantage API"]
 
-Two tasks rather than one, so the failure boundary is visible in the Airflow UI: an API problem and a database
-problem light up different tasks.
+    subgraph Docker["🐳 Docker (started by docker compose up)"]
+        direction LR
+        subgraph Airflow["Airflow · runs daily at 22:00 UTC"]
+            F["1️⃣ fetch_stock_data"] --> S["2️⃣ store_stock_data"]
+        end
+        DB[("🐘 PostgreSQL<br/>market_data.stocks")]
+    end
 
-**Schedule:** daily at 22:00 UTC (`config.json`), with `catchup=False`. Alpha Vantage's `GLOBAL_QUOTE` reports
-daily-close figures, so a more frequent schedule would re-fetch identical values while consuming the free-tier
-request budget.
-
-### Adding a symbol
-
-Edit `config.json` — no code change, no rebuild:
-
-```json
-{ "symbols": ["AAPL", "GOOG", "MSFT", "NVDA"], "schedule": "0 22 * * *" }
+    API -->|"price + company info"| F
+    S -->|"save rows"| DB
+    You(["👤 You"]) -.->|"browser: localhost:8080"| Airflow
+    You -.->|"psql: localhost:5433"| DB
 ```
 
----
-
-## Error handling
-
-Alpha Vantage reports most failures **inside an HTTP 200 body** rather than through a status code, so
-`raise_for_status()` alone is not enough — the response body is inspected before any field is read.
-
-| Condition | How it is detected | What happens |
-| --- | --- | --- |
-| **Quota / rate limit spent** | `Information` or `Note` key in a 200 body | Logged, remaining symbols abandoned (the budget is account-wide, so further calls would only repeat the error), and **not retried** — retrying a quota error just burns quota |
-| **Unknown or delisted symbol** | Empty `Global Quote`, or an `Error Message` key | Logged; **other symbols continue** |
-| **API unreachable / HTTP error** | `requests.exceptions.RequestException` | Logged; other symbols continue; Airflow retries the task twice with a 5-minute delay |
-| **Incomplete company data** | Missing `Name` or `MarketCapitalization` | Symbol skipped — both columns are `NOT NULL`, so a half-populated row never reaches the database |
-
-**Partial failure is visible, not silent.** Symbols that succeeded are written and committed *first*, then the
-task raises with the list of failures. You get the data that was collectable **and** a red task explaining
-exactly what was missed — rather than a green task hiding a problem, or an all-or-nothing run where one delisted
-ticker costs you everything.
-
-### Request budget
-
-Each symbol costs 2 requests (`GLOBAL_QUOTE` + `OVERVIEW`). At 3 symbols on a daily schedule that is **6
-requests/day**, comfortably inside Alpha Vantage's free tier (~25/day at the time of writing) with headroom for
-manual re-triggers.
-
-> Confirm the current limit at [alphavantage.co/support](https://www.alphavantage.co/support/#support) — it has
-> changed more than once. If you add symbols, keep `2 × symbols` inside your tier.
+1. **Fetch**: for each stock in [`config.json`](config.json) (AAPL, GOOG, MSFT by default), get today's quote and the company details.
+2. **Store**: save one row per stock per trading day. Running it again updates the row instead of making a duplicate.
 
 ---
 
-## Scalability & resilience
+## Run it
 
-- **Config-driven symbols** — scale the workload by editing a JSON list, not by touching code.
-- **Idempotent writes** — a `UNIQUE (symbol, date_collected)` constraint plus `INSERT … ON CONFLICT DO UPDATE`
-  means re-runs and retries update in place. Safe to trigger repeatedly.
-- **Isolated failures** — one bad symbol cannot fail the batch.
-- **Task-level retries** — two retries with a 5-minute delay for transient network failure; quota errors are
-  deliberately excluded.
-- **`BIGINT` volume** — heavily traded tickers exceed `INT`'s ~2.1 billion ceiling.
-- **`LocalExecutor`** — swapping to `CeleryExecutor` for parallel workers is a compose change, not a code change.
+### Step 1: Install Docker (the only thing you need)
 
----
+| Your system | Install |
+| --- | --- |
+| **Windows** | [Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/) (turn on WSL 2 when asked) |
+| **macOS** (Intel or Apple Silicon) | [Docker Desktop](https://docs.docker.com/desktop/setup/install/mac-install/) |
+| **Linux** | [Docker Engine](https://docs.docker.com/engine/install/) + the [Compose plugin](https://docs.docker.com/compose/install/linux/) |
 
-## Security
+You don't need Python or Postgres on your machine. Everything runs inside Docker.
 
-- All credentials come from environment variables; nothing is hardcoded.
-- `.env` is git-ignored. Only `.env.example`, containing placeholders, is committed.
-- A `detect-private-key` pre-commit hook guards against committing a key by accident.
-- Postgres is reachable only inside the compose network (the published port is for local inspection).
-
----
-
-## Development
+Make sure Docker is running, then check:
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt          # Python 3.8-3.11; Airflow 2.9 does not support 3.12+
+docker compose version
+```
+
+### Step 2: Get the code
+
+```bash
+git clone <this-repo-url>
+cd MarketPipe
+```
+
+No git? Download the ZIP from GitHub, unzip it, and open a terminal inside the folder.
+
+### Step 3: Add your free API key
+
+Get a free key (takes about 20 seconds): **https://www.alphavantage.co/support/#api-key**
+
+Create your `.env` file from the template:
+
+| Terminal | Command |
+| --- | --- |
+| macOS / Linux / Git Bash | `cp .env.example .env` |
+| Windows PowerShell | `Copy-Item .env.example .env` |
+| Windows CMD | `copy .env.example .env` |
+
+Open `.env` in any text editor and paste your key:
+
+```ini
+ALPHA_API_KEY=your_key_here
+```
+
+You can leave everything else in `.env` as it is.
+
+### Step 4: Start it
+
+```bash
+docker compose up -d
+```
+
+The first start downloads and builds images, which takes **about 3–5 minutes**. Later starts take seconds.
+
+### Step 5: Open Airflow
+
+Go to **http://localhost:8080** and log in with `airflow` / `airflow`.
+
+Find `stock_data_pipeline` and click **▶ Trigger DAG** to run it right away instead of waiting for the daily schedule.
+When both tasks turn green, the data is in the database.
+
+```mermaid
+flowchart LR
+    A["docker compose up -d"] --> B["Wait ~3-5 min<br/>first time only"]
+    B --> C["Open localhost:8080<br/>login airflow / airflow"]
+    C --> D["▶ Trigger DAG"]
+    D --> E["✅ Both tasks green"]
+    E --> F["Query the data"]
+```
+
+### Step 6: See your data
+
+Open a database shell (works in bash, zsh, and PowerShell):
+
+```bash
+docker compose exec postgres sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB'
+```
+
+Then run:
+
+```sql
+SELECT symbol, name, trading_day, price, volume FROM market_data.stocks ORDER BY symbol;
+```
+
+```
+ symbol |         name          | trading_day |  price   |  volume
+--------+-----------------------+-------------+----------+----------
+ AAPL   | Apple Inc.            | 2026-09-10  | 326.5700 | 70011913
+ GOOG   | Alphabet Inc Class C  | 2026-09-10  | 330.3900 | 16418878
+ MSFT   | Microsoft Corporation | 2026-09-10  | 492.4400 | 16038805
+```
+
+Type `\q` to leave the shell.
+
+### Stop it
+
+```bash
+docker compose down       # stop, keep your data
+docker compose down -v    # stop and delete all data (fresh start)
+```
+
+---
+
+## What's running
+
+`docker compose up` starts four containers, in this order:
+
+```mermaid
+flowchart LR
+    PG[("postgres<br/>stores data")] --> INIT["airflow-init<br/>sets up Airflow, then exits"]
+    INIT --> WEB["airflow-webserver<br/>UI on :8080"]
+    INIT --> SCH["airflow-scheduler<br/>runs the DAG on schedule"]
+```
+
+Check they are up with `docker compose ps`. Follow the logs with `docker compose logs -f`.
+
+---
+
+## Customize
+
+Everything you'd normally change is in [`config.json`](config.json). You don't need to rebuild anything:
+
+```json
+{
+  "symbols": ["AAPL", "GOOG", "MSFT", "NVDA"],
+  "schedule": "0 22 * * *",
+  "retries": 2,
+  "retry_delay_minutes": 5
+}
+```
+
+| Setting | Meaning |
+| --- | --- |
+| `symbols` | Stock tickers to track |
+| `schedule` | When to run, as a [cron expression](https://crontab.guru/#0_22_*_*_*) in UTC |
+| `retries` / `retry_delay_minutes` | How often Airflow retries a failed task, and how long it waits between tries |
+
+> **Free-tier limit:** each stock uses 2 API calls, and the free tier allows about 25 calls a day.
+> Keep `2 × number of stocks` under your limit. Three stocks use only 6 calls.
+
+---
+
+## When something goes wrong
+
+Each stock is handled on its own, so one bad ticker doesn't stop the others:
+
+```mermaid
+flowchart TD
+    Start(["For each stock"]) --> Call["Call Alpha Vantage"]
+    Call --> Q{"What came back?"}
+    Q -->|"✅ Valid data"| Save["Save it"]
+    Q -->|"⏳ Rate limited"| Wait["Wait and retry<br/>5s → 15s → 45s"]
+    Wait -->|"clears"| Call
+    Wait -->|"still limited"| Stop["🛑 Daily quota spent<br/>skip remaining stocks"]
+    Q -->|"❌ Unknown ticker"| Skip["Log it, go to next stock"]
+    Q -->|"🌐 Network error"| Skip
+    Save --> End(["Saved stocks are committed.<br/>If any failed, the task turns red<br/>and lists which ones and why"])
+    Skip --> End
+    Stop --> End
+```
+
+You always keep the data that was collected, and a red task in Airflow tells you what was missed.
+
+### Troubleshooting
+
+| Problem | Fix |
+| --- | --- |
+| `ALPHA_API_KEY is not set` in task logs | Add your key to `.env`, then run `docker compose up -d` again |
+| Port **8080** already in use | Stop the other app, or change `"8080:8080"` to e.g. `"8081:8080"` in `docker-compose.yml` and open `localhost:8081` |
+| Port **5433** already in use | Set `POSTGRES_HOST_PORT=5434` in `.env` |
+| `permission denied` on Linux | Add yourself to the docker group: `sudo usermod -aG docker $USER`, then log out and back in |
+| Task fails with "quota exhausted" | You've used today's free API calls. Try again tomorrow, or track fewer stocks |
+| Changes to `init.sql` have no effect | The schema is only created the first time. Run `docker compose down -v`, then `up -d` |
+| Airflow page won't load | It's probably still starting. Wait a minute and check `docker compose logs -f airflow-webserver` |
+| Commands fail in Windows CMD | Use **PowerShell** or **Git Bash** instead |
+| Containers keep restarting | Give Docker at least **4 GB of RAM** (Docker Desktop → Settings → Resources) |
+
+---
+
+## Project layout
+
+```
+MarketPipe/
+├── docker-compose.yml      # Starts everything
+├── .env.example            # Template for your settings and API key
+├── config.json             # Stocks, schedule, retries
+├── dags/
+│   └── stock_data_dag.py   # Airflow pipeline: fetch → store
+├── core/
+│   ├── stock_fetcher.py    # Talks to Alpha Vantage
+│   └── storage.py          # Writes to PostgreSQL
+├── database_setup/
+│   └── init.sql            # Table definition
+├── docker/airflow/         # Airflow image and its dependencies
+└── tests/                  # Unit tests (no real API or database needed)
+```
+
+---
+
+## What gets stored
+
+Table `market_data.stocks`, one row per **stock + trading day**:
+
+| Column | Example | Always filled? |
+| --- | --- | --- |
+| `symbol`, `name` | `AAPL`, `Apple Inc.` | ✅ |
+| `trading_day` | `2026-09-10` | ✅ |
+| `price`, `volume` | `326.57`, `70011913` | ✅ |
+| `open_price`, `high_price`, `low_price` | `316.67` … | optional |
+| `previous_close`, `change_amount`, `change_percent` | … | optional |
+| `market_cap` | from company overview | optional |
+| `collected_at` | when the pipeline ran | ✅ |
+
+<details>
+<summary><b>Design notes</b> (why it's built this way)</summary>
+
+- **Keyed on `trading_day`, not the run date.** A weekend run returns Friday's prices. Keying on the trading day
+  means it updates Friday's row instead of storing a copy under the wrong date.
+- **Safe to re-run.** `UNIQUE (symbol, trading_day)` plus `INSERT … ON CONFLICT DO UPDATE` means triggering it
+  10 times still gives one row per stock per day.
+- **Optional fields can be empty.** A quote missing its high/low is still useful, and ETFs have no market cap.
+  Only the fields that make a row meaningful are required.
+- **Alpha Vantage hides errors in successful responses.** It returns HTTP 200 with an error message inside, so
+  every response body is checked before it's used.
+- **Two tasks, not one.** An API problem and a database problem show up as different red boxes in Airflow.
+- **Credentials stay out of git.** `.env` is git-ignored, and a pre-commit hook blocks accidentally committed keys.
+
+More detail: [`docs/planning/architecture.md`](docs/planning/architecture.md).
+
+</details>
+
+---
+
+## For developers
+
+Run the tests locally (Python **3.9–3.11**; Airflow 2.9 does not support 3.12+):
+
+```bash
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 python -m unittest discover tests -v
 black .
 ```
 
-Tests are `unittest`, with all network and database calls mocked — the suite never touches the real API or a
-live database. CI runs the same suite plus `black --check` on every push and pull request.
+Or run them inside Docker without installing Python:
 
----
+```bash
+docker compose exec airflow-scheduler python -m unittest discover tests -v
+```
 
-## Future work
-
-Deliberately out of scope for this pipeline, and what would change first in production:
-
-- `CeleryExecutor` or `KubernetesExecutor` for parallel workers
-- A secrets manager instead of `.env`
-- Alerting on DAG failure (Slack / PagerDuty via `on_failure_callback`)
-- Intraday granularity and historical backfill
-- A dead-letter table for symbols that fail repeatedly
+CI runs the tests and `black --check` on every pull request.
 
 ---
 

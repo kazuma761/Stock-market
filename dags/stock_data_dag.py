@@ -70,7 +70,7 @@ with DAG(
     dag_id="stock_data_pipeline",
     default_args=default_args,
     description="Fetch daily stock data from Alpha Vantage and store it in Postgres",
-    schedule_interval=CONFIG["schedule"],
+    schedule=CONFIG["schedule"],
     catchup=False,
     max_active_runs=1,
     tags=["stocks", "marketpipe"],

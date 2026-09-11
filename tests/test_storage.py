@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import psycopg2
 
-from core.storage import QUALIFIED_TABLE, Storage
+from core.storage import COLUMNS, QUALIFIED_TABLE, Storage
 
 DB_ENV = {
     "POSTGRES_USER": "user",
@@ -15,11 +15,17 @@ DB_ENV = {
 }
 
 ROW = {
-    "name": "Apple Inc",
-    "market_cap": "3000000000000",
-    "volume": "50000000",
-    "price": "150.00",
-    "change_percent": "1.23",
+    "name": "Apple Inc.",
+    "trading_day": "2026-09-10",
+    "price": "326.5700",
+    "open_price": "316.6700",
+    "high_price": "326.7400",
+    "low_price": "316.5100",
+    "previous_close": "315.3400",
+    "change_amount": "11.2300",
+    "change_percent": "3.5612",
+    "volume": "70011913",
+    "market_cap": "4602128761000",
 }
 
 
@@ -59,11 +65,42 @@ class TestStorage(unittest.TestCase):
 
         self.assertEqual(written, 1)
         sql, params = cursor.execute.call_args[0]
-        # The unique constraint plus ON CONFLICT is what makes a re-run
-        # idempotent rather than duplicating the day's row.
-        self.assertIn("ON CONFLICT (symbol, date_collected) DO UPDATE", sql)
+        # Keyed on the trading session, not the run date: a weekend re-run must
+        # update Friday's row, not create a second one for the same session.
+        self.assertIn("ON CONFLICT (symbol, trading_day) DO UPDATE", sql)
         self.assertIn(QUALIFIED_TABLE, sql)
         self.assertEqual(params[0], "AAPL")
+        self.assertEqual(len(params), len(COLUMNS))
+
+    @patch.dict("core.storage.os.environ", DB_ENV, clear=True)
+    @patch("core.storage.psycopg2.connect")
+    def test_all_quote_fields_are_persisted(self, mock_connect):
+        cursor = mock_connect.return_value.cursor.return_value
+
+        self.storage.store_data({"AAPL": ROW})
+
+        sql, params = cursor.execute.call_args[0]
+        stored = dict(zip(COLUMNS, params))
+        # Every field the API handed us should land -- they cost no extra call.
+        self.assertEqual(stored["open_price"], "316.6700")
+        self.assertEqual(stored["high_price"], "326.7400")
+        self.assertEqual(stored["low_price"], "316.5100")
+        self.assertEqual(stored["previous_close"], "315.3400")
+        self.assertEqual(stored["change_amount"], "11.2300")
+        self.assertEqual(stored["trading_day"], "2026-09-10")
+
+    @patch.dict("core.storage.os.environ", DB_ENV, clear=True)
+    @patch("core.storage.psycopg2.connect")
+    def test_nullable_fields_pass_through_as_none(self, mock_connect):
+        cursor = mock_connect.return_value.cursor.return_value
+        sparse = dict(ROW, high_price=None, market_cap=None)
+
+        written = self.storage.store_data({"AAPL": sparse})
+
+        self.assertEqual(written, 1)
+        stored = dict(zip(COLUMNS, cursor.execute.call_args[0][1]))
+        self.assertIsNone(stored["high_price"])
+        self.assertIsNone(stored["market_cap"])
 
     @patch.dict("core.storage.os.environ", DB_ENV, clear=True)
     @patch("core.storage.psycopg2.connect")
@@ -100,7 +137,8 @@ class TestStorage(unittest.TestCase):
 
         self.storage.store_data({"AAPL": row})
 
-        self.assertEqual(cursor.execute.call_args[0][1][3], "5000000000")
+        stored = dict(zip(COLUMNS, cursor.execute.call_args[0][1]))
+        self.assertEqual(stored["volume"], "5000000000")
 
     @patch("core.storage.psycopg2.connect")
     def test_empty_data_writes_nothing(self, mock_connect):

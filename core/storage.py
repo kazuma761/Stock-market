@@ -10,20 +10,41 @@ SCHEMA_NAME = "market_data"
 TABLE_NAME = "stocks"
 QUALIFIED_TABLE = f"{SCHEMA_NAME}.{TABLE_NAME}"
 
-REQUIRED_FIELDS = ("name", "market_cap", "volume", "price", "change_percent")
+# Must be present and non-empty, or the row is rejected. Everything else is
+# nullable: a quote missing its high/low is still a usable price record.
+REQUIRED_FIELDS = ("name", "trading_day", "price", "volume")
 
-# Idempotent write: the (symbol, date_collected) unique constraint turns a
-# repeat run into an update rather than a duplicate row.
+# Column order shared by the INSERT and the parameter tuple, so the two cannot
+# drift apart silently.
+COLUMNS = (
+    "symbol",
+    "name",
+    "trading_day",
+    "price",
+    "open_price",
+    "high_price",
+    "low_price",
+    "previous_close",
+    "change_amount",
+    "change_percent",
+    "volume",
+    "market_cap",
+)
+
+_PLACEHOLDERS = ", ".join(["%s"] * len(COLUMNS))
+_UPDATES = ",\n        ".join(
+    f"{c} = EXCLUDED.{c}" for c in COLUMNS if c not in ("symbol", "trading_day")
+)
+
+# Idempotent write. The conflict target is (symbol, trading_day) -- the session
+# the data describes, not the day we happened to run -- so a weekend re-run
+# updates Friday's row instead of inventing a second one.
 UPSERT_SQL = f"""
-    INSERT INTO {QUALIFIED_TABLE}
-        (symbol, name, market_cap, volume, price, change_percent)
-    VALUES (%s, %s, %s, %s, %s, %s)
-    ON CONFLICT (symbol, date_collected) DO UPDATE SET
-        name           = EXCLUDED.name,
-        market_cap     = EXCLUDED.market_cap,
-        volume         = EXCLUDED.volume,
-        price          = EXCLUDED.price,
-        change_percent = EXCLUDED.change_percent
+    INSERT INTO {QUALIFIED_TABLE} ({", ".join(COLUMNS)})
+    VALUES ({_PLACEHOLDERS})
+    ON CONFLICT (symbol, trading_day) DO UPDATE SET
+        {_UPDATES},
+        collected_at = now()
 """
 
 
@@ -98,17 +119,15 @@ class Storage:
 
                     self.cur.execute(
                         UPSERT_SQL,
-                        (
-                            symbol,
-                            fields["name"],
-                            fields["market_cap"],
-                            fields["volume"],
-                            fields["price"],
-                            fields["change_percent"],
+                        tuple(
+                            symbol if c == "symbol" else fields.get(c) for c in COLUMNS
                         ),
                     )
                     written += 1
-                    self.logger.info(f"Stored data for {symbol}.")
+                    self.logger.info(
+                        f"Stored {symbol} for {fields['trading_day']}: "
+                        f"price={fields['price']} volume={fields['volume']}"
+                    )
 
             self.logger.info(f"Wrote {written} row(s) to {QUALIFIED_TABLE}.")
             return written

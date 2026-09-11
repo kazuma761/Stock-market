@@ -2,7 +2,8 @@
 
 **Plan**: `.claude/plans/slim-stock-pipeline.md`
 **Branch**: `assignment/slim-stock-pipeline`
-**Status**: **PARTIAL** — all code complete and unit-validated; three environment-dependent validations could not run
+**Status**: **PARTIAL** — all code complete; full suite (28/28) now passing including the DAG tests; two
+environment-dependent validations still cannot run (Docker, live API)
 
 ## Summary
 
@@ -32,7 +33,8 @@ from 892 to **380 lines**, inside the PRD's 300–450 guardrail.
 
 ## Tests added
 
-**32 tests total. 20 executed and passing; 12 could not run locally.**
+**28 tests total — all 28 executed and passing.** (An earlier pass reported 32 and could not run the DAG tests;
+both are corrected here. The DAG tests now run against a Python 3.11 venv with Airflow 2.9.0 installed.)
 
 `tests/test_stock_fetcher.py` — **12 tests, all passing**: happy path · two-requests-per-symbol · `Information`
 quota key · `Note` quota key · loop stops after quota hit · symbols fetched before quota are kept · bad symbol
@@ -43,7 +45,7 @@ isolated · `Error Message` key · network error doesn't stop run · incomplete 
 repeat store still upserts · incomplete row skipped not fatal · high-volume BIGINT passthrough · empty input ·
 rollback on DB error.
 
-`tests/test_dags.py` — **8 tests, NOT RUN**: DagBag import errors · DAG registered · task wiring · catchup and
+`tests/test_dags.py` — **8 tests, all passing**: DagBag import errors · DAG registered · task wiring · catchup and
 static start_date · retries · raises on partial failure · stores before raising · silent on full success.
 
 ## Validation results
@@ -51,7 +53,8 @@ static start_date · retries · raises on partial failure · stores before raisi
 | Level | Result |
 | --- | --- |
 | L1 syntax & style | **PASS** — `black --check .` clean (10 files), `compileall` clean |
-| L2 unit tests | **PASS (partial)** — 20/20 run passed; 8 DAG tests not run |
+| L2 unit tests | **PASS** — 28/28, zero deprecation warnings (`python -m unittest discover tests`) |
+| DagBag parse | **PASS** — no import errors, `stock_data_pipeline` registered, `fetch >> store` wired |
 | L3 integration | **NOT RUN** — Docker daemon unavailable |
 | L4 manual validation | **NOT RUN** — requires a running stack and a valid API key |
 | L5 hygiene | **PASS** — `.env` untracked; zero off-brief references |
@@ -88,13 +91,36 @@ static start_date · retries · raises on partial failure · stores before raisi
 8. **Local validation ran in a scratch venv**, not the project environment. This machine runs Python 3.13, which
    Airflow 2.9 does not support.
 
+## Second pass — defects found and fixed
+
+A follow-up execution re-validated the tree and found four things the first pass left wrong:
+
+1. **The container would have failed to parse the DAG.** `docker/airflow/Dockerfile` built
+   `apache/airflow:2.9.0` against `constraints-3.8.txt` — that image tag ships **Python 3.8**, where the PEP 585
+   builtin generics used in `core/stock_fetcher.py` and `core/storage.py` (`dict[str, str]`, `list[str]`,
+   `tuple[...]` in signatures) raise `TypeError` at import time. Every test passed locally (3.13) and in CI
+   (3.11) while the actual runtime was the one interpreter that breaks. **Fixed:** pinned
+   `apache/airflow:2.9.0-python3.11` with matching `constraints-3.11.txt`, which also aligns the container with
+   the CI interpreter. This was invisible to every validation in the plan, since Docker was unavailable.
+
+2. **The `./logs` bind mount would have cost an undocumented manual step.** No `logs/` directory exists in the
+   repo (it is gitignored), so Docker would create it root-owned while Airflow runs as UID 50000 — a
+   `mkdir`/`chown` the README does not mention, breaking AC #10's "exactly one manual step". **Fixed:** replaced
+   with a named `airflow-logs` volume.
+
+3. **`schedule_interval` is deprecated** in Airflow 2.9 and emitted a `RemovedInAirflow3Warning` on every DAG
+   parse. **Fixed:** switched to `schedule`.
+
+4. **README claimed Python 3.8–3.11 support**, which the same PEP 585 generics make false. **Fixed:** 3.9–3.11.
+
 ## Issues encountered
 
 - **No valid API key** — blocks Phase 0 and all live validation. *This is the main open risk.*
 - **Docker daemon not running** — blocks image build, compose up, schema init, and the cold-start timing that is
   the PRD's stated RIGHT condition.
-- **Python 3.13 locally** — Airflow 2.9 supports 3.8–3.11, so the DAG tests cannot run on this machine. CI pins
-  3.11 and will exercise them.
+- **Python 3.13 is the default local interpreter** — Airflow 2.9 does not support it. Resolved by building a
+  Python 3.11 venv from the project's own constraints file; the DAG tests now run locally rather than waiting
+  for CI to exercise them for the first time.
 - **`tests/dags_test.py` was never being discovered** — `unittest discover` only matches `test*.py`. Renamed to
   `tests/test_dags.py`; it is now collected.
 - **Three conflicting Airflow versions** (`requirements.txt` 2.8.0, Dockerfile 2.9.0, CI 2.8.1) reconciled to
@@ -102,7 +128,9 @@ static start_date · retries · raises on partial failure · stores before raisi
 
 ## Before submitting — required
 
-1. Put a real key in `.env`, then run `docker compose up` and trigger the DAG.
+1. Put a real key in `.env`, then run `docker compose up` and trigger the DAG. **This is also the first real
+   test of the `-python3.11` image pin above** — the DAG parsing inside the container is the thing that was
+   silently broken.
 2. Confirm rows land, then trigger again and confirm the count is unchanged.
 3. Confirm CI is green (this is where the 8 DAG tests first execute).
 4. Verify the current free-tier limit still leaves 6 requests/day comfortable.
