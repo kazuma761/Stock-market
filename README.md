@@ -154,7 +154,7 @@ docker compose version
 ### 2. Get the code
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/kazuma761/Stock-market/tree/cooled
 cd MarketPipe
 ```
 
